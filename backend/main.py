@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel
 import json
 import asyncio
@@ -24,6 +24,9 @@ class ChatRequest(BaseModel):
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
 AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")
+GITHUB_OAUTH_URL = os.getenv("GITHUB_OAUTH_URL")
+GITHUB_CLIENT_ID = os.getenv("GITHUB_CLIENT_ID")
+GITHUB_CLIENT_SECRET = os.getenv("GITHUB_CLIENT_SECRET")
 
 # Tool definitions
 AVAILABLE_TOOLS = [
@@ -297,6 +300,55 @@ async def stream_azure_openai_response(
     
     print("🏁 Stream completed\n")
     yield "data: [DONE]\n\n"
+
+@app.get("/github-login")
+async def github_login():
+    """
+    Initiates the GitHub login process.
+    """
+    # Redirect the user to the GitHub OAuth authorization URL
+    return RedirectResponse(url=f"{GITHUB_OAUTH_URL}{GITHUB_CLIENT_ID}", status_code=302)
+
+@app.get("/github-callback")
+async def github_callback(code: str):
+    """
+    Handles the GitHub OAuth callback.
+    """
+    # Exchange the code for an access token
+
+    async with httpx.AsyncClient() as client:
+        token_response = await client.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": GITHUB_CLIENT_ID,
+                "client_secret": GITHUB_CLIENT_SECRET,
+                "code": code
+            }
+        )
+
+    if token_response.status_code == 200:
+        token_data = token_response.json()
+        access_token = token_data.get("access_token")
+
+        if access_token:
+            # Use the access token to fetch user information
+            async with httpx.AsyncClient() as client:
+                user_response = await client.get(
+                        "https://api.github.com/user",
+                        headers={"Authorization": f"Bearer {access_token}",
+                                 "Accept": "application/json"}
+                    )
+
+            if user_response.status_code == 200:
+                user_data = user_response.json()
+                return {"user": user_data}
+            else:
+                return {"error": "Failed to fetch user information"}
+        else:
+            return {"error": "Failed to obtain access token"}
+    else:
+        return {"error": "Failed to exchange code for access token"}
 
 @app.post("/chat/stream")
 async def stream_chat(request: ChatRequest):
