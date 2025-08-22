@@ -342,6 +342,8 @@ async def github_callback(code: str):
 
             if user_response.status_code == 200:
                 user_data = user_response.json()
+                import json
+                print(json.dumps(token_data, indent=2))
                 return {"user": user_data}
             else:
                 return {"error": "Failed to fetch user information"}
