@@ -1,4 +1,5 @@
-from fastapi import FastAPI
+from http.client import HTTPException
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse, RedirectResponse
 from pydantic import BaseModel
 import json
@@ -310,7 +311,7 @@ async def github_login():
     return RedirectResponse(url=f"{GITHUB_OAUTH_URL}{GITHUB_CLIENT_ID}", status_code=302)
 
 @app.get("/github-callback")
-async def github_callback(code: str):
+async def github_callback(code: str, response: Response):
     """
     Handles the GitHub OAuth callback.
     """
@@ -332,21 +333,28 @@ async def github_callback(code: str):
         access_token = token_data.get("access_token")
 
         if access_token:
-            # Use the access token to fetch user information
+            # Set the access token in a cookie
+            response.set_cookie(
+                key="github_access_token",
+                value=access_token,
+                httponly=True,      # Prevents JS access
+                # secure=True,        # Use HTTPS in production
+                samesite="lax"      # Adjust as needed
+            )
+
             async with httpx.AsyncClient() as client:
                 user_response = await client.get(
                         "https://api.github.com/user",
                         headers={"Authorization": f"Bearer {access_token}",
-                                 "Accept": "application/json"}
+                                    "Accept": "application/json"}
                     )
-
-            if user_response.status_code == 200:
-                user_data = user_response.json()
-                import json
-                print(json.dumps(token_data, indent=2))
-                return {"user": user_data}
-            else:
-                return {"error": "Failed to fetch user information"}
+                if user_response.status_code == 200:
+                    user_data = user_response.json()
+                    import json
+                    print(json.dumps(token_data, indent=2))
+                    return {"user": user_data}
+                else:
+                    return {"error": "Failed to fetch user information"}
         else:
             return {"error": "Failed to obtain access token"}
     else:
@@ -398,6 +406,24 @@ async def health_check():
         "available_tools": [tool["function"]["name"] for tool in AVAILABLE_TOOLS]
     }
 
+
+@app.get("/github/user")
+async def get_github_user(request: Request):
+    access_token = request.cookies.get("github_access_token")
+    if not access_token:
+        raise HTTPException(status_code=401, detail="Missing access token cookie")
+
+    async with httpx.AsyncClient() as client:
+        user_response = await client.get(
+            "https://api.github.com/user",
+            headers={"Authorization": f"Bearer {access_token}",
+                     "Accept": "application/json"}
+        )
+    if user_response.status_code == 200:
+        return user_response.json()
+    else:
+        raise HTTPException(status_code=user_response.status_code, detail="Failed to fetch user info")
+    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
